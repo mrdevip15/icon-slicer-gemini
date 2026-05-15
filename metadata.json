@@ -1,0 +1,6 @@
+{
+  "name": "IconSlicer AI",
+  "description": "AI-powered icon asset generator and editor. Create, slice, and export icon sheets using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
