@@ -74,7 +74,10 @@ async function startServer() {
 
   if (!admin.apps.length) {
     // Try explicit config project first if it exists, otherwise default
-    const initOptions = configProjectId ? { projectId: configProjectId } : {};
+    const initOptions: any = {};
+    if (configProjectId) initOptions.projectId = configProjectId;
+    if (firebaseConfig.storageBucket) initOptions.storageBucket = firebaseConfig.storageBucket;
+    
     console.log(`[Firebase] Initializing admin with options: ${JSON.stringify(initOptions)}`);
     firebaseApp = admin.initializeApp(initOptions);
   } else {
@@ -91,17 +94,7 @@ async function startServer() {
     console.log(`[Firestore] CONFIG: Project="${currentProjectId}", Database="${dbId || '(default)'}"`);
     
     db = dbId ? getFirestore(firebaseApp, dbId) : getFirestore(firebaseApp);
-    
-    // Quick probe to verify if the service is reachable/initialized
-    console.log(`[Firestore] Probing connection...`);
-    db.listCollections().then(cols => {
-      console.log(`[Firestore] Successfully connected! Found ${cols.length} collections.`);
-    }).catch(err => {
-      console.warn(`[Firestore] Connection probe failed: ${err.message}`);
-      if (err.message.includes('NOT_FOUND') || err.message.includes('not found')) {
-         console.error(`[IAM HELP] PROJECT/DATABASE NOT FOUND. Check if project ID "${currentProjectId}" is correct and that Firestore is CREATED in the Firebase console.`);
-      }
-    });
+    console.log(`[Firestore] Connected to: "${dbId || '(default)'}"`);
   } catch (dbInitErr: any) {
     console.error(`[Firestore] Init error: ${dbInitErr.message}`);
     db = getFirestore(firebaseApp);
@@ -131,6 +124,7 @@ async function startServer() {
     let status: any = {
       auth: "pending",
       firestore: "pending",
+      storage: "pending",
       keyFound: false,
       identity: "unknown",
       details: []
@@ -158,6 +152,7 @@ async function startServer() {
       const configPath = `users/${userId}/private/config`;
       const currentDbId = firebaseConfig.firestoreDatabaseId || '(default)';
       
+      // 1. Test Firestore
       try {
         const configDoc = await db.collection('users').doc(userId).collection('private').doc('config').get();
         if (configDoc.exists) {
@@ -169,13 +164,15 @@ async function startServer() {
           status.path = configPath;
           
           // Try fallback 1
-          const defaultDb = firebaseApp.firestore();
-          const fallDoc = await defaultDb.collection('users').doc(userId).collection('private').doc('config').get();
-          if (fallDoc.exists) {
-            status.firestore = "success_via_fallback_1";
-            status.keyFound = true;
-            status.databaseUsed = "(default)";
-          }
+          try {
+            const defaultDb = firebaseApp.firestore();
+            const fallDoc = await defaultDb.collection('users').doc(userId).collection('private').doc('config').get();
+            if (fallDoc.exists) {
+              status.firestore = "success_via_fallback_1";
+              status.keyFound = true;
+              status.databaseUsed = "(default)";
+            }
+          } catch (e) {}
         }
       } catch (dbErr: any) {
         status.firestore = "error";
@@ -186,6 +183,28 @@ async function startServer() {
            console.error(`[IAM HELP] To fix PERMISSION_DENIED: Go to GCP Console > IAM & Admin for project "${currentProjectId}", and grant "Cloud Datastore User" to the service account running this app.`);
         }
       }
+
+      // 2. Test Storage (Service Account permissions)
+      try {
+        const bucketName = firebaseApp.options.storageBucket;
+        console.log(`[Storage] Probing bucket: "${bucketName || '(default)'}"`);
+        const bucket = firebaseApp.storage().bucket();
+        // Just check if bucket exists or list one file with prefix to check permissions
+        // We can try to list files with a non-existent prefix
+        await bucket.getFiles({ prefix: 'test-permission-check-', maxResults: 1 });
+        status.storage = "success";
+      } catch (storageErr: any) {
+        status.storage = "error";
+        status.storageError = storageErr.message;
+        console.error(`[Storage] Test failed: ${storageErr.message}`);
+        
+        if (storageErr.message.includes('permission') || storageErr.message.includes('403')) {
+           console.error(`[IAM HELP] To fix STORAGE_PERMISSION_DENIED: Go to GCP Console > IAM & Admin for project "${currentProjectId}", and grant "Storage Object Admin" to the service account running this app.`);
+        } else if (storageErr.message.includes('not exist') || storageErr.message.includes('404')) {
+           console.error(`[STORAGE HELP] BUCKET NOT FOUND. Ensure you have "Started" Cloud Storage in the Firebase Console and that the bucket name in firebase-applet-config.json is correct.`);
+        }
+      }
+
     } catch (authErr: any) {
       status.auth = "failed";
       status.error = authErr.message;
@@ -310,10 +329,12 @@ To fix:
       }
     }
 
-    // FALLBACK: If no user key found, check for a global environment key
-    if (!stabilityKey && process.env.STABILITY_API_KEY) {
-      console.log("[Stability] Using global STABILITY_API_KEY fallback");
-      stabilityKey = process.env.STABILITY_API_KEY;
+    // NO FALLBACK: We strictly use the key from Firestore for Stability AI
+    // to prevent accidental consumption of server-side keys.
+    if (!stabilityKey) {
+      console.log("[Stability] No user-provided key found in Firestore.");
+    } else {
+      console.log("[Stability] Using user-provided key from Firestore.");
     }
 
     // If SDXL is preferred, enforce it

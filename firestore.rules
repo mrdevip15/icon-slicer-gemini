@@ -40,7 +40,7 @@ service cloud.firestore {
 
     // Collection Rules
     match /iconSets/{iconSetId} {
-      allow create: if isVerified() && isValidId(iconSetId) && isValidIconSet(incoming());
+      allow create: if isSignedIn() && isValidId(iconSetId) && isValidIconSet(incoming());
       allow get: if isOwner(existing().ownerId);
       allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
       allow update: if isOwner(existing().ownerId) 
@@ -55,7 +55,7 @@ service cloud.firestore {
       allow get: if isOwner(userId);
       
       match /history/{historyId} {
-        allow create: if isVerified() && isOwner(userId) && isValidId(historyId) && isValidUserHistory(incoming());
+        allow create: if isSignedIn() && isOwner(userId) && isValidId(historyId) && isValidUserHistory(incoming());
         allow list: if isOwner(userId);
         allow delete: if isOwner(userId);
       }

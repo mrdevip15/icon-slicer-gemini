@@ -118,20 +118,43 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
       });
       const data = await response.json();
       
-      if (data.auth === 'success' && data.keyFound) {
-        setTestResult({ 
-          success: true, 
-          message: `Connected! Verified key in project "${data.project}" via database "${data.databaseUsed}".` 
-        });
-      } else {
-        const identityMsg = data.identity && data.identity !== 'unknown' 
-          ? `\n\nYour app is running as: ${data.identity}. Please ensure this email has "Cloud Datastore User" permission in your Google Cloud project "${data.project || 'juaravibecodingastrea'}".`
+      // Construct a consolidated status message
+      let message = "";
+      let isSuccess = false;
+
+      const identityMsg = data.identity && data.identity !== 'unknown' 
+          ? `\n\nIdentity: ${data.identity}`
           : '';
-        setTestResult({ 
-          success: false, 
-          message: `Failed: ${data.error || 'Key not found in Firestore.'}${identityMsg}` 
-        });
+
+      const isFirestoreSuccess = data.auth === 'success' && (data.firestore || '').includes('success');
+      
+      if (isFirestoreSuccess) {
+        message = `✅ Auth & Firestore: Project "${data.project}".`;
+        isSuccess = true;
+      } else {
+        message = `❌ Firestore: ${data.firestore === 'error' ? data.error : (data.firestore || 'Failed')}.`;
       }
+
+      if (data.storage === 'success') {
+        message += `\n✅ Storage: Accessible.`;
+      } else {
+        const isBucketMissing = (data.storageError || '').includes('not exist') || (data.storageError || '').includes('404');
+        message += `\n❌ Storage: ${data.storageError || 'Access denied'}.`;
+        
+        if (isBucketMissing) {
+           message += `\n\n[STORAGE FIX]: The bucket "${data.project}.firebasestorage.app" (or ".appspot.com") was not found. Please go to the Firebase Console -> Search for "Storage" -> click "Get Started" to initialize your storage bucket.`;
+        }
+        isSuccess = false; // Even if Firestore works, if Storage fails, it's not a full success
+      }
+
+      if (!isSuccess) {
+        message += `\n\n[IAM FIX]: Ensure ${data.identity || 'the service account'} has both "Cloud Datastore User" and "Storage Object Admin" roles in project "${data.project || 'juaravibecodingastrea'}".`;
+      }
+
+      setTestResult({ 
+        success: isSuccess, 
+        message: message + identityMsg
+      });
     } catch (err: any) {
       setTestResult({ success: false, message: `Error: ${err.message}` });
     } finally {
@@ -204,16 +227,33 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
         // Upload to Firebase Storage if user is authenticated
         if (user) {
           setStatus('UPLOADING');
+          console.log("[Storage] Starting upload to Firebase Storage...");
           try {
             const storagePath = `users/${user.uid}/generations/${Date.now()}.png`;
+            console.log(`[Storage] Target path: ${storagePath}`);
             const storageRef = ref(storage, storagePath);
-            await uploadString(storageRef, imageUrl, 'data_url');
+            
+            // Add a timeout for the upload
+            let timeoutId: any;
+            const uploadPromise = uploadString(storageRef, imageUrl, 'data_url');
+            const timeoutPromise = new Promise((_, reject) => {
+               timeoutId = setTimeout(() => reject(new Error("UPLOAD_TIMEOUT: Storage upload took too long (30s).")), 30000);
+            });
+
+            await Promise.race([uploadPromise, timeoutPromise]);
+            clearTimeout(timeoutId);
+            console.log("[Storage] Upload successful");
+
             if (isCancelledRef.current) return;
 
+            console.log("[Storage] Fetching download URL...");
             const downloadUrl = await getDownloadURL(storageRef);
+            console.log(`[Storage] URL obtained: ${downloadUrl.substring(0, 50)}...`);
+
             if (isCancelledRef.current) return;
             
             setStatus('FINALIZING');
+            console.log("[Firestore] Saving metadata to 'iconSets' collection...");
             // Save metadata to Firestore
             await addDoc(collection(db, 'iconSets'), {
               ownerId: user.uid,
@@ -225,14 +265,27 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
               storagePath: storagePath,
               createdAt: serverTimestamp()
             });
+            console.log("[Firestore] Metadata saved successfully");
             
             if (!isCancelledRef.current) {
               onGenerated(downloadUrl);
             }
-          } catch (err) {
-            console.error("Storage/Firestore error:", err);
+          } catch (err: any) {
+            console.error("Storage/Firestore error during upload phase:", err);
+            
+            // Helpful message for the user
+            let msg = err.message;
+            if (msg.includes('storage/unauthorized')) {
+               msg = `PERM_DENIED: Firebase Storage bucket permissions error.\n\nACTION: Grant "Storage Object Admin" to "${user?.email || 'your account'}" and the sandbox service account in GCP IAM.`;
+            } else if (msg.includes('storage/retry-limit-exceeded')) {
+               msg = "STORAGE_ERROR: Network timeout or bucket not found.";
+            }
+
+            setError(`PHASE_FAILED (${status}): ${msg}`);
+
             if (!isCancelledRef.current) {
-              onGenerated(imageUrl); // Fallback
+              console.warn("[Fallback] Defaulting to base64 image due to upload failure. This will NOT be saved to Cloud Assets.");
+              onGenerated(imageUrl); // Fallback to avoid getting stuck
             }
           }
         } else {
@@ -529,7 +582,15 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
           </section>
         </div>
 
-        <div className="p-4 border-t border-brand-border">
+        <div className="p-4 border-t border-brand-border space-y-3">
+          {!user && (
+            <div className="p-2 bg-amber-500/5 border border-amber-500/10 rounded flex items-start gap-2">
+               <Info className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
+               <p className="text-[9px] text-amber-400 leading-tight">
+                 <span className="font-bold">AUTH_REQUIRED:</span> Assets won't be saved to your cloud gallery unless you are signed in.
+               </p>
+            </div>
+          )}
           {isGenerating ? (
             <button
               onClick={handleStop}
