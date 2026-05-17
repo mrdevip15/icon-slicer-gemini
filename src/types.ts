@@ -12,7 +12,7 @@ export interface GridConfig {
   cols: number;
 }
 
-export type AppMode = 'START' | 'GENERATE' | 'EDIT' | 'CROP' | 'SLICE';
+export type AppMode = 'START' | 'GENERATE' | 'EDIT' | 'CROP' | 'SLICE' | 'ASSETS';
 
 export interface ImageState {
   originalUrl: string;

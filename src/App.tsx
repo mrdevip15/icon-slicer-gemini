@@ -29,8 +29,13 @@ import { AppMode, STYLE_PRESETS, GenerationConfig } from './types';
 import SetupView from './components/SetupView';
 import GenerationView from './components/GenerationView';
 import EditorWorkspace from './components/EditorWorkspace';
+import AssetsGallery from './components/AssetsGallery';
+
+import { useAuth } from './lib/AuthContext';
+import { LogIn, LogOut, User as UserIcon } from 'lucide-react';
 
 export default function App() {
+  const { user, login, logout, loading: authLoading } = useAuth();
   const [mode, setMode] = useState<AppMode>('START');
   const [image, setImage] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -76,26 +81,70 @@ export default function App() {
     setMode('START');
   };
 
+  const activeTabClass = "text-white border-b-2 border-brand-accent pb-3.5 pt-4 cursor-pointer";
+  const inactiveTabClass = "hover:text-white transition-colors cursor-pointer py-3.5 pt-4 text-brand-text-muted";
+
   return (
     <div className="h-screen bg-bg-dark text-[#E0E0E0] font-sans selection:bg-brand-accent/30 selection:text-white overflow-hidden flex flex-col">
       {/* Header */}
       <header className="h-12 border-b border-brand-border bg-[#151517] flex items-center justify-between px-4 z-50 shrink-0">
-        <div className="flex items-center gap-6 cursor-pointer" onClick={reset}>
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-6 cursor-pointer">
+          <div className="flex items-center gap-2" onClick={reset}>
             <div className="w-5 h-5 bg-brand-accent rounded shadow-sm"></div>
             <span className="font-bold tracking-tight text-white uppercase text-sm">
               IconSlicer <span className="text-[10px] bg-brand-accent/20 text-brand-accent px-1.5 py-0.5 rounded ml-1 tracking-normal font-mono">BETA</span>
             </span>
           </div>
           
-          <nav className="hidden md:flex gap-4 text-[11px] font-bold text-brand-text-muted tracking-wider uppercase">
-            <span className="text-white border-b-2 border-brand-accent pb-3.5 pt-4">Workspace</span>
-            <span className="hover:text-white transition-colors cursor-pointer py-3.5 pt-4">Assets</span>
-            <span className="hover:text-white transition-colors cursor-pointer py-3.5 pt-4">History</span>
+          <nav className="hidden md:flex gap-4 text-[11px] font-bold tracking-wider uppercase">
+            <span 
+              onClick={() => mode !== 'START' && mode !== 'GENERATE' && setMode('EDIT')} 
+              className={mode !== 'ASSETS' ? activeTabClass : inactiveTabClass}
+            >
+              Workspace
+            </span>
+            <span 
+              onClick={() => setMode('ASSETS')}
+              className={mode === 'ASSETS' ? activeTabClass : inactiveTabClass}
+            >
+              Assets
+            </span>
+            <span className="hover:text-white transition-colors cursor-pointer py-3.5 pt-4 text-brand-text-muted opacity-50">History</span>
           </nav>
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 mr-2">
+            {!authLoading && (
+              user ? (
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-end hidden sm:flex">
+                    <span className="text-[10px] text-white font-bold leading-none">{user.displayName}</span>
+                    <span className="text-[9px] text-zinc-500 font-mono leading-none mt-1 uppercase">Cloud Sync On</span>
+                  </div>
+                  <button 
+                    onClick={() => logout()}
+                    className="p-1.5 hover:bg-white/5 rounded-md text-zinc-500 hover:text-white transition-all group"
+                    title="Logout"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                  {user.photoURL && (
+                    <img src={user.photoURL} alt="User" className="w-6 h-6 rounded-full border border-brand-border" />
+                  )}
+                </div>
+              ) : (
+                <button 
+                  onClick={() => login()}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-brand-accent/10 border border-brand-accent/20 rounded text-[10px] font-bold uppercase tracking-widest text-brand-accent hover:bg-brand-accent/20 transition-all"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Login
+                </button>
+              )
+            )}
+          </div>
+
           {mode !== 'START' && (
             <div className="flex items-center gap-1 bg-white/5 rounded p-1 border border-brand-border mr-2">
               <button 
@@ -138,6 +187,17 @@ export default function App() {
                 pushToHistory(url);
                 setMode('EDIT');
               }} 
+              onBack={() => setMode('START')}
+            />
+          )}
+
+          {mode === 'ASSETS' && (
+            <AssetsGallery 
+              key="assets"
+              onSelect={(url) => {
+                pushToHistory(url);
+                setMode('EDIT');
+              }}
               onBack={() => setMode('START')}
             />
           )}
