@@ -11,15 +11,16 @@ import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 
 interface GenerationViewProps {
   key?: string;
+  initialPrompt?: string;
   onGenerated: (url: string) => void;
   onBack: () => void;
 }
 
-export default function GenerationView({ onGenerated, onBack }: GenerationViewProps) {
+export default function GenerationView({ initialPrompt, onGenerated, onBack }: GenerationViewProps) {
   const { user } = useAuth();
   const [recentPrompts, setRecentPrompts] = useState<string[]>([]);
   const [config, setConfig] = useState<GenerationConfig>({
-    prompt: '',
+    prompt: initialPrompt || '',
     style: STYLE_PRESETS[0].prompt,
     gridSize: '4x4',
     iconSize: '256x256'

@@ -30,6 +30,7 @@ import SetupView from './components/SetupView';
 import GenerationView from './components/GenerationView';
 import EditorWorkspace from './components/EditorWorkspace';
 import AssetsGallery from './components/AssetsGallery';
+import HistoryGallery from './components/HistoryGallery';
 
 import { useAuth } from './lib/AuthContext';
 import { LogIn, LogOut, User as UserIcon } from 'lucide-react';
@@ -38,6 +39,7 @@ export default function App() {
   const { user, login, logout, loading: authLoading } = useAuth();
   const [mode, setMode] = useState<AppMode>('START');
   const [image, setImage] = useState<string | null>(null);
+  const [prefilledPrompt, setPrefilledPrompt] = useState<string>('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
@@ -102,7 +104,7 @@ export default function App() {
                 if (image) setMode('EDIT');
                 else setMode('START');
               }} 
-              className={mode !== 'ASSETS' ? activeTabClass : inactiveTabClass}
+              className={(mode === 'EDIT' || mode === 'START' || mode === 'GENERATE') ? activeTabClass : inactiveTabClass}
             >
               Workspace
             </span>
@@ -112,7 +114,12 @@ export default function App() {
             >
               Assets
             </span>
-            <span className="hover:text-white transition-colors cursor-pointer py-3.5 pt-4 text-brand-text-muted opacity-50">History</span>
+            <span 
+              onClick={() => setMode('HISTORY')}
+              className={mode === 'HISTORY' ? activeTabClass : inactiveTabClass}
+            >
+              History
+            </span>
           </nav>
         </div>
 
@@ -186,11 +193,16 @@ export default function App() {
           {mode === 'GENERATE' && (
             <GenerationView 
               key="generate" 
+              initialPrompt={prefilledPrompt}
               onGenerated={(url) => {
                 pushToHistory(url);
                 setMode('EDIT');
+                setPrefilledPrompt('');
               }} 
-              onBack={() => setMode('START')}
+              onBack={() => {
+                setMode('START');
+                setPrefilledPrompt('');
+              }}
             />
           )}
 
@@ -200,6 +212,17 @@ export default function App() {
               onSelect={(url) => {
                 pushToHistory(url);
                 setMode('EDIT');
+              }}
+              onBack={() => setMode(image ? 'EDIT' : 'START')}
+            />
+          )}
+
+          {mode === 'HISTORY' && (
+            <HistoryGallery 
+              key="history"
+              onSelectPrompt={(prompt) => {
+                setPrefilledPrompt(prompt);
+                setMode('GENERATE');
               }}
               onBack={() => setMode(image ? 'EDIT' : 'START')}
             />
