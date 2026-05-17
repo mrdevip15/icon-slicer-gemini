@@ -372,6 +372,8 @@ async function startServer() {
   // NEW: Delete asset (Removes from both Storage AND Firestore)
   app.post("/api/delete-asset", async (req, res) => {
     const { docId, storagePath, authToken } = req.body;
+    console.log(`[Delete Req] docId=${docId}, path=${storagePath}, token=${authToken ? 'PRESENT' : 'MISSING'}`);
+    
     if (!docId || !storagePath || !authToken) {
       return res.status(400).json({ error: "Missing parameters" });
     }
@@ -380,10 +382,16 @@ async function startServer() {
       const auth = firebaseApp.auth();
       const decodedToken = await auth.verifyIdToken(authToken);
       const userId = decodedToken.uid;
+      console.log(`[Delete Auth] user=${userId}`);
 
-      // Security: Check if path contains userId
+      // Security: Check if path contains userId or is in user's root
       if (!storagePath.includes(userId)) {
-        return res.status(403).json({ error: "Unauthorized: You can only delete your own files." });
+        console.warn(`[Delete Security] UID mismatch: path=${storagePath}, user=${userId}`);
+        // Allow if the path is literally just the user folder plus filename
+        const allowedPrefix = `users/${userId}/`;
+        if (!storagePath.startsWith(allowedPrefix)) {
+          return res.status(403).json({ error: "Unauthorized: You can only delete your own files." });
+        }
       }
 
       console.log(`[Delete Server] deleting storage file: ${storagePath}`);

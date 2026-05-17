@@ -19,13 +19,15 @@ import {
   Zap,
   MousePointer2,
   Save,
-  Grid
+  Grid,
+  Cloud
 } from 'lucide-react';
 import Cropper, { Point, Area } from 'react-easy-crop';
 import { cn } from '../lib/utils';
 import { IconSlice, GridConfig } from '../types';
 import JSZip from 'jszip';
 import confetti from 'canvas-confetti';
+import { useAuth } from '../lib/AuthContext';
 
 interface EditorWorkspaceProps {
   key?: string;
@@ -37,8 +39,10 @@ interface EditorWorkspaceProps {
 type EditorTool = 'SELECT' | 'CROP' | 'SLICE' | 'EFFECTS';
 
 export default function EditorWorkspace({ image, initialGridSize, onUpdateImage }: EditorWorkspaceProps) {
+  const { user } = useAuth();
   const [activeTool, setActiveTool] = useState<EditorTool>('SELECT');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSavingCloud, setIsSavingCloud] = useState(false);
 
   // Cropping State
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
@@ -117,6 +121,54 @@ export default function EditorWorkspace({ image, initialGridSize, onUpdateImage 
   const handleHandleMouseDown = (handle: 'top' | 'bottom' | 'left' | 'right') => (e: React.MouseEvent) => {
     e.preventDefault();
     setActiveHandle(handle);
+  };
+
+  const handleCloudSave = async () => {
+    if (!user) {
+      alert("Please login to save to cloud library.");
+      return;
+    }
+    
+    setIsSavingCloud(true);
+    try {
+      const idToken = await user.getIdToken();
+      const timestamp = Date.now();
+      const storagePath = `users/${user.uid}/generations/${timestamp}_edited.png`;
+      
+      const resp = await fetch('/api/upload-to-storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          authToken: idToken,
+          filePath: storagePath,
+          fileData: image,
+          contentType: 'image/png',
+          metadata: {
+            prompt: `Edited Asset ${new Date().toLocaleTimeString()}`,
+            gridSize: `${grid.rows}x${grid.cols}`,
+            style: 'Edited',
+            type: 'edited'
+          }
+        })
+      });
+
+      if (!resp.ok) {
+        const data = await resp.json();
+        throw new Error(data.error || "Upload failed");
+      }
+
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+      alert("Asset saved to your cloud library!");
+    } catch (err: any) {
+      console.error("Cloud save failed:", err);
+      alert(`Save failed: ${err.message}`);
+    } finally {
+      setIsSavingCloud(false);
+    }
   };
 
   useEffect(() => {
@@ -256,6 +308,15 @@ export default function EditorWorkspace({ image, initialGridSize, onUpdateImage 
           >
             <Eraser className="w-4 h-4" />
             <span className="absolute left-14 bg-zinc-800 text-white text-[9px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity uppercase mono font-bold border border-zinc-700">Remove BG</span>
+          </button>
+
+          <button 
+            disabled={isSavingCloud || !user}
+            onClick={handleCloudSave}
+            className="w-10 h-10 rounded bg-zinc-800 text-white flex items-center justify-center hover:bg-zinc-700 transition-all border border-brand-border disabled:opacity-20 group relative"
+          >
+            {isSavingCloud ? <Zap className="w-4 h-4 animate-spin text-brand-accent" /> : <Cloud className="w-4 h-4" />}
+            <span className="absolute left-14 bg-zinc-800 text-white text-[9px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity uppercase mono font-bold border border-zinc-700">Cloud Save</span>
           </button>
           
           <button 

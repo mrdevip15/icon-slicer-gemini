@@ -182,8 +182,12 @@ export default function AssetsGallery({ onSelect, onBack }: AssetsGalleryProps) 
   };
 
   const handleDelete = async (asset: any) => {
-    if (!user || !asset) return;
-    if (!window.confirm("Are you sure you want to delete this asset from your cloud library? This action cannot be undone.")) return;
+    if (!user || !asset) {
+      alert("Missing authentication or asset data.");
+      return;
+    }
+    
+    if (!window.confirm("Are you sure you want to delete this asset? This will permanently remove the image and its metadata.")) return;
     
     try {
       const idToken = await user.getIdToken();
@@ -198,17 +202,18 @@ export default function AssetsGallery({ onSelect, onBack }: AssetsGalleryProps) 
       });
       
       if (!resp.ok) {
-        const data = await resp.json();
-        throw new Error(data.error || "Delete failed");
+        const errorData = await resp.json();
+        throw new Error(errorData.error || `Server responded with ${resp.status}`);
       }
       
       setSelectedAsset(null);
-      // The real-time listener (onSnapshot) will naturally remove it from the 'assets' state
+      // Real-time listener will handle removal from UI
     } catch (err: any) {
       console.error("Delete failed:", err);
-      alert(`Failed to delete asset: ${err.message}`);
+      alert(`DELETE_FAILED: ${err.message}`);
     }
   };
+
 
   const handleDownload = async (url: string | null, filename: string) => {
     if (!url) return;
@@ -375,17 +380,7 @@ export default function AssetsGallery({ onSelect, onBack }: AssetsGalleryProps) 
                     className="group-hover:scale-105"
                     onUrlResolved={(url) => updateAssetUrl(asset.id, url)} 
                   />
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(asset);
-                      }}
-                      className="p-2 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded-full transition-all border border-red-500/30"
-                      title="Delete Asset"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
@@ -402,15 +397,27 @@ export default function AssetsGallery({ onSelect, onBack }: AssetsGalleryProps) 
                         if (asset.imageUrl) onSelect(asset.imageUrl);
                       }}
                       disabled={!asset.imageUrl}
-                      className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all border border-white/20 disabled:opacity-30"
+                      className="p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all border border-white/20 disabled:opacity-30 hover:scale-110"
                       title="Open in Workspace"
                     >
-                      <LayoutGrid className="w-4 h-4" />
+                      <LayoutGrid className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
                 <div className="p-3 space-y-2">
-                  <p className="text-[10px] text-white font-medium truncate uppercase">{asset.prompt}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[10px] text-white font-medium truncate uppercase flex-1">{asset.prompt}</p>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(asset);
+                      }}
+                      className="p-1 text-zinc-500 hover:text-red-500 transition-all shrink-0"
+                      title="Delete Asset"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                   <div className="flex justify-between items-center text-[9px] mono text-zinc-500">
                     <div className="flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
