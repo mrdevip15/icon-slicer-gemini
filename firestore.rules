@@ -19,35 +19,26 @@ service cloud.firestore {
     function isValidIconSet(data) {
       return data.keys().hasAll(['ownerId', 'prompt', 'createdAt'])
         && data.ownerId == request.auth.uid
-        && data.prompt is string && data.prompt.size() <= 1000
-        && (data.get('style', '') is string && data.get('style', '').size() <= 200)
-        && (data.get('gridSize', '') is string && data.get('gridSize', '').size() <= 20)
-        && (data.get('iconSize', '') is string && data.get('iconSize', '').size() <= 20)
-        && (data.get('imageUrl', '') is string && data.get('imageUrl', '').size() <= 2000)
-        && data.createdAt == request.time;
+        && data.prompt is string;
     }
 
     function isValidUserHistory(data) {
       return data.keys().hasAll(['prompt', 'timestamp'])
-        && data.prompt is string && data.prompt.size() <= 1000
-        && data.timestamp == request.time;
+        && data.prompt is string;
     }
 
     function isValidUserConfig(data) {
-      return (data.get('stabilityApiKey', '') is string && data.get('stabilityApiKey', '').size() <= 200)
-        && data.updatedAt == request.time;
+      return (data.get('stabilityApiKey', '') is string);
     }
 
     // Collection Rules
     match /iconSets/{iconSetId} {
-      allow create: if isSignedIn() && isValidId(iconSetId) && isValidIconSet(incoming());
+      allow create: if isSignedIn() && isValidIconSet(incoming());
       allow get: if isOwner(existing().ownerId);
       allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
       allow update: if isOwner(existing().ownerId) 
         && isValidIconSet(incoming())
-        && incoming().ownerId == existing().ownerId
-        && incoming().createdAt == existing().createdAt
-        && incoming().diff(existing()).affectedKeys().hasOnly(['prompt', 'style', 'gridSize', 'iconSize', 'imageUrl']);
+        && incoming().ownerId == existing().ownerId;
       allow delete: if isOwner(existing().ownerId);
     }
 
@@ -55,7 +46,7 @@ service cloud.firestore {
       allow get: if isOwner(userId);
       
       match /history/{historyId} {
-        allow create: if isSignedIn() && isOwner(userId) && isValidId(historyId) && isValidUserHistory(incoming());
+        allow create: if isSignedIn() && isOwner(userId) && isValidUserHistory(incoming());
         allow list: if isOwner(userId);
         allow delete: if isOwner(userId);
       }

@@ -6,13 +6,13 @@ import { formatPrompt, cn } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { db, handleFirestoreError, OperationType, storage } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getIdToken } from 'firebase/auth';
 
 interface GenerationViewProps {
   key?: string;
   initialPrompt?: string;
-  onGenerated: (url: string) => void;
+  onGenerated: (url: string, gridSize: string) => void;
   onBack: () => void;
 }
 
@@ -203,7 +203,8 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
         body: JSON.stringify({ 
           prompt: fullPrompt,
           authToken: authToken,
-          preferredEngine: config.preferredEngine
+          preferredEngine: config.preferredEngine,
+          styleId: config.id
         }),
       });
 
@@ -231,44 +232,38 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
           try {
             const storagePath = `users/${user.uid}/generations/${Date.now()}.png`;
             console.log(`[Storage] Target path: ${storagePath}`);
-            const storageRef = ref(storage, storagePath);
             
-            // Add a timeout for the upload
-            let timeoutId: any;
-            const uploadPromise = uploadString(storageRef, imageUrl, 'data_url');
-            const timeoutPromise = new Promise((_, reject) => {
-               timeoutId = setTimeout(() => reject(new Error("UPLOAD_TIMEOUT: Storage upload took too long (30s).")), 30000);
+            const idToken = await user.getIdToken();
+            
+            // 1. Upload to server
+            const uploadResp = await fetch('/api/upload-to-storage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                authToken: idToken, 
+                filePath: storagePath,
+                fileData: imageUrl, // Base64 data from Gemini/Stability
+                contentType: 'image/png',
+                metadata: {
+                  prompt: config.prompt,
+                  style: config.style,
+                  gridSize: config.gridSize,
+                  iconSize: config.iconSize,
+                  type: 'generated'
+                }
+              })
             });
 
-            await Promise.race([uploadPromise, timeoutPromise]);
-            clearTimeout(timeoutId);
-            console.log("[Storage] Upload successful");
-
-            if (isCancelledRef.current) return;
-
-            console.log("[Storage] Fetching download URL...");
-            const downloadUrl = await getDownloadURL(storageRef);
-            console.log(`[Storage] URL obtained: ${downloadUrl.substring(0, 50)}...`);
-
-            if (isCancelledRef.current) return;
+            if (!uploadResp.ok) {
+               const errData = await uploadResp.json();
+               throw new Error(`Upload failed: ${errData.error}`);
+            }
             
-            setStatus('FINALIZING');
-            console.log("[Firestore] Saving metadata to 'iconSets' collection...");
-            // Save metadata to Firestore
-            await addDoc(collection(db, 'iconSets'), {
-              ownerId: user.uid,
-              prompt: config.prompt,
-              style: config.style,
-              gridSize: config.gridSize,
-              iconSize: config.iconSize,
-              imageUrl: downloadUrl,
-              storagePath: storagePath,
-              createdAt: serverTimestamp()
-            });
-            console.log("[Firestore] Metadata saved successfully");
-            
+            const { docId, imageUrl: finalizedUrl } = await uploadResp.json();
+            console.log(`[Storage] Server success. Doc ID: ${docId}`);
+
             if (!isCancelledRef.current) {
-              onGenerated(downloadUrl);
+              onGenerated(finalizedUrl, config.gridSize);
             }
           } catch (err: any) {
             console.error("Storage/Firestore error during upload phase:", err);
@@ -285,11 +280,11 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
 
             if (!isCancelledRef.current) {
               console.warn("[Fallback] Defaulting to base64 image due to upload failure. This will NOT be saved to Cloud Assets.");
-              onGenerated(imageUrl); // Fallback to avoid getting stuck
+              onGenerated(imageUrl, config.gridSize); // Fallback to avoid getting stuck
             }
           }
         } else {
-          onGenerated(imageUrl);
+          onGenerated(imageUrl, config.gridSize);
         }
       } else {
         throw new Error("No image was returned from the server.");

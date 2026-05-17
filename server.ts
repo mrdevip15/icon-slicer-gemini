@@ -213,8 +213,201 @@ async function startServer() {
     res.json(status);
   });
 
+  // NEW: Direct upload to Storage (Bypasses rules for authenticated users via Admin SDK)
+  app.post("/api/upload-to-storage", async (req, res) => {
+    const { authToken, filePath, fileData, contentType, metadata } = req.body;
+    if (!authToken || !filePath || !fileData) {
+      return res.status(400).json({ error: "Missing parameters (authToken, filePath, or fileData)" });
+    }
+
+    try {
+      const auth = firebaseApp.auth();
+      const decodedToken = await auth.verifyIdToken(authToken);
+      const userId = decodedToken.uid;
+
+      // Security Check: Only allow uploads to their own user directory
+      if (!filePath.startsWith(`users/${userId}/`)) {
+        return res.status(403).json({ error: "Unauthorized: You can only upload to your own directory." });
+      }
+
+      console.log(`[Storage Server] Receiving upload for: ${filePath} (${contentType})`);
+
+      // Convert base64 to buffer
+      const base64Data = fileData.includes('base64,') ? fileData.split('base64,')[1] : fileData;
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      const bucket = firebaseApp.storage().bucket();
+      const file = bucket.file(filePath);
+
+      await file.save(buffer, {
+        metadata: {
+          contentType: contentType || 'image/png',
+        },
+        resumable: false // Better for small files
+      });
+
+      console.log(`[Storage Server] Successfully saved: ${filePath}`);
+
+      // NEW: Also create Firestore entry to ensure sync
+      let docId = null;
+      if (metadata) {
+        try {
+          console.log(`[Firestore Server] Creating metadata entry for user: ${userId}`);
+          const iconSetsCol = db.collection('iconSets');
+          const docRef = await iconSetsCol.add({
+            ownerId: userId,
+            ...metadata,
+            imageUrl: "", // Client will resolve via storagePath
+            storagePath: filePath,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            serverUploaded: true
+          });
+          docId = docRef.id;
+          console.log(`[Firestore Server] Entry created: ${docId}`);
+        } catch (fsErr: any) {
+          console.error("[Firestore Server] Failed to create entry:", fsErr.message);
+        }
+      }
+
+      const proxyUrl = `/api/asset-proxy?path=${encodeURIComponent(filePath)}&authToken=${authToken}`;
+      res.json({ success: true, path: filePath, docId, imageUrl: proxyUrl });
+    } catch (err: any) {
+      console.error("[Storage Server] Failed to upload:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // NEW: Sync Library - Scans storage and creates missing Firestore documents
+  app.post("/api/sync-library", async (req, res) => {
+    const { authToken } = req.body;
+    if (!authToken) return res.status(400).json({ error: "Missing authToken" });
+
+    try {
+      const auth = firebaseApp.auth();
+      const decodedToken = await auth.verifyIdToken(authToken);
+      const userId = decodedToken.uid;
+
+      console.log(`[Sync Server] Scanning library for user: ${userId}`);
+      
+      const bucket = firebaseApp.storage().bucket();
+      const prefix = `users/${userId}/generations/`;
+      
+      const [files] = await bucket.getFiles({ prefix });
+      console.log(`[Sync Server] Found ${files.length} files in Storage.`);
+
+      // Get existing Firestore assets to avoid duplicates
+      const existingDocs = await db.collection('iconSets')
+        .where('ownerId', '==', userId)
+        .get();
+      
+      const existingPaths = new Set(existingDocs.docs.map(d => d.data().storagePath));
+      console.log(`[Sync Server] ${existingPaths.size} files already indexed in Firestore.`);
+
+      let createdCount = 0;
+      const results = [];
+
+      for (const file of files) {
+        if (!file.name.endsWith('.png') && !file.name.endsWith('.jpg')) continue;
+        if (existingPaths.has(file.name)) continue;
+
+        console.log(`[Sync Server] Indexing missing file: ${file.name}`);
+        
+        const metadata = {
+          ownerId: userId,
+          imageUrl: "", // Client will resolve via storagePath
+          storagePath: file.name,
+          prompt: "Recovered Asset",
+          gridSize: "single",
+          style: "Recovered",
+          type: file.name.includes('_source') ? 'source_upload' : 'generated',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          syncedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('iconSets').add(metadata);
+        createdCount++;
+        results.push({ id: docRef.id, path: file.name });
+      }
+
+      console.log(`[Sync Server] Sync complete. Created ${createdCount} missing entries.`);
+      res.json({ 
+        success: true, 
+        found: files.length, 
+        synced: createdCount,
+        results: results 
+      });
+    } catch (err: any) {
+      console.error("[Sync Server] Failed:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // NEW: Proxy for storage assets (Bypasses rules for thumbnails/previews)
+  app.get("/api/asset-proxy", async (req, res) => {
+    const { path: storagePath, authToken } = req.query;
+    if (!storagePath || !authToken) return res.status(400).send("Missing parameters");
+
+    try {
+      const auth = firebaseApp.auth();
+      await auth.verifyIdToken(authToken as string);
+      // Optional: Check if user owns the asset if path contains userId
+
+      const bucket = firebaseApp.storage().bucket();
+      const file = bucket.file(storagePath as string);
+      
+      const [exists] = await file.exists();
+      if (!exists) return res.status(404).send("File not found");
+
+      const [metadata] = await file.getMetadata();
+      res.setHeader('Content-Type', metadata.contentType || 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+
+      file.createReadStream().pipe(res);
+    } catch (err: any) {
+      console.error("[Asset Proxy] Failed:", err.message);
+      res.status(500).send(err.message);
+    }
+  });
+
+  // NEW: Delete asset (Removes from both Storage AND Firestore)
+  app.post("/api/delete-asset", async (req, res) => {
+    const { docId, storagePath, authToken } = req.body;
+    if (!docId || !storagePath || !authToken) {
+      return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    try {
+      const auth = firebaseApp.auth();
+      const decodedToken = await auth.verifyIdToken(authToken);
+      const userId = decodedToken.uid;
+
+      // Security: Check if path contains userId
+      if (!storagePath.includes(userId)) {
+        return res.status(403).json({ error: "Unauthorized: You can only delete your own files." });
+      }
+
+      console.log(`[Delete Server] deleting storage file: ${storagePath}`);
+      const bucket = firebaseApp.storage().bucket();
+      const file = bucket.file(storagePath);
+      
+      try {
+        await file.delete();
+      } catch (storageErr: any) {
+        console.warn(`[Delete Server] Storage file might not exist or failed to delete: ${storageErr.message}`);
+      }
+
+      console.log(`[Delete Server] deleting firestore doc: ${docId}`);
+      await db.collection('iconSets').doc(docId).delete();
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[Delete Server] Failed:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/generate-icons", async (req, res) => {
-    const { prompt, authToken, engineId = 'stable-diffusion-xl-1024-v1-0', preferredEngine } = req.body;
+    const { prompt, authToken, engineId = 'stable-diffusion-xl-1024-v1-0', preferredEngine, styleId } = req.body;
     
     if (!prompt) {
       return res.status(400).json({ error: "Missing prompt" });
@@ -347,6 +540,18 @@ To fix:
       }
 
       console.log(`[Stability] Starting generation for: "${prompt.substring(0, 50)}..."`);
+      
+      const stylePresetMap: Record<string, string> = {
+        'fantasy': 'fantasy-art',
+        'scifi': 'digital-art',
+        'pixel': 'pixel-art',
+        'minimal': 'line-art',
+        '3d-clay': '3d-model',
+        'flat': 'digital-art'
+      };
+      const stylePreset = (styleId && stylePresetMap[styleId]) || 'digital-art';
+      console.log(`[Stability] Using style preset: ${stylePreset} for styleId: ${styleId}`);
+
       try {
         const response = await fetch(
           `https://api.stability.ai/v1/generation/${engineId}/text-to-image`,
@@ -359,14 +564,15 @@ To fix:
             },
             body: JSON.stringify({
               text_prompts: [
-                { text: prompt, weight: 1 }
+                { text: prompt, weight: 1 },
+                { text: "text, watermark, low quality, distorted, blurry, artifacts, cropped, worst quality", weight: -1 }
               ],
               cfg_scale: 7,
               height: 1024,
               width: 1024,
               samples: 1,
-              steps: 30, // Optimized for 0.9 credits
-              style_preset: "photographic" // Default to photographic for SDXL
+              steps: 35, 
+              style_preset: stylePreset
             }),
           }
         );

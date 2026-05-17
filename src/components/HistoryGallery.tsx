@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../lib/AuthContext';
 import { Loader2, History, Wand2, Clock, Trash2 } from 'lucide-react';
@@ -39,6 +39,17 @@ export default function HistoryGallery({ onSelectPrompt, onBack }: HistoryGaller
         setLoading(false);
     }
   }, [user]);
+
+  const handleDeleteItem = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, `users/${user.uid}/history`, id));
+      setHistory(prev => prev.filter(item => item.id !== id));
+    } catch (err) {
+      console.error("Error deleting history item:", err);
+    }
+  };
 
   if (loading) {
     return (
@@ -100,6 +111,13 @@ export default function HistoryGallery({ onSelectPrompt, onBack }: HistoryGaller
                     <span className="text-brand-accent/50 group-hover:text-brand-accent transition-colors">Click to reuse prompt</span>
                   </div>
                 </div>
+                <button 
+                  onClick={(e) => handleDeleteItem(e, item.id)}
+                  className="opacity-0 group-hover:opacity-100 p-2 text-zinc-600 hover:text-red-500 transition-all"
+                  title="Delete from history"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </motion.div>
             ))}
           </div>

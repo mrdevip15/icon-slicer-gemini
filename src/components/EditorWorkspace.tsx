@@ -30,24 +30,32 @@ import confetti from 'canvas-confetti';
 interface EditorWorkspaceProps {
   key?: string;
   image: string;
+  initialGridSize?: string;
   onUpdateImage: (url: string) => void;
 }
 
 type EditorTool = 'SELECT' | 'CROP' | 'SLICE' | 'EFFECTS';
 
-export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspaceProps) {
+export default function EditorWorkspace({ image, initialGridSize, onUpdateImage }: EditorWorkspaceProps) {
   const [activeTool, setActiveTool] = useState<EditorTool>('SELECT');
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Cropping State
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+  const [aspect, setAspect] = useState<number | undefined>(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
 
   // Slicing State
   const [grid, setGrid] = useState<GridConfig>({ rows: 4, cols: 4 });
-  const [slices, setSlices] = useState<IconSlice[]>([]);
+  const [gridBounds, setGridBounds] = useState({
+    top: 5, // Default 5% margin
+    left: 5,
+    right: 5,
+    bottom: 5
+  });
   const [isExporting, setIsExporting] = useState(false);
+  const [activeHandle, setActiveHandle] = useState<'top' | 'bottom' | 'left' | 'right' | null>(null);
 
   // Effects State
   const [effects, setEffects] = useState({
@@ -58,8 +66,17 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
   });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Background Removal
+  useEffect(() => {
+    if (initialGridSize) {
+      if (initialGridSize === '4x4') setGrid({ rows: 4, cols: 4 });
+      else if (initialGridSize === '8x8') setGrid({ rows: 8, cols: 8 });
+      else if (initialGridSize === 'single') setGrid({ rows: 1, cols: 1 });
+    }
+  }, [initialGridSize]);
+
   const handleRemoveBackground = async () => {
     setIsProcessing(true);
     try {
@@ -97,6 +114,46 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
     }
   };
 
+  const handleHandleMouseDown = (handle: 'top' | 'bottom' | 'left' | 'right') => (e: React.MouseEvent) => {
+    e.preventDefault();
+    setActiveHandle(handle);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!activeHandle || !containerRef.current) return;
+      
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+      setGridBounds(prev => {
+        const next = { ...prev };
+        if (activeHandle === 'top') next.top = Math.max(0, Math.min(y, 45));
+        if (activeHandle === 'bottom') next.bottom = Math.max(0, Math.min(100 - y, 45));
+        if (activeHandle === 'left') next.left = Math.max(0, Math.min(x, 45));
+        if (activeHandle === 'right') next.right = Math.max(0, Math.min(100 - x, 45));
+        return next;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setActiveHandle(null);
+    };
+
+    if (activeHandle) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = activeHandle === 'top' || activeHandle === 'bottom' ? 'ns-resize' : 'ew-resize';
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'default';
+    };
+  }, [activeHandle]);
+
   const handleExport = async () => {
     setIsExporting(true);
     try {
@@ -106,8 +163,15 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
       await new Promise((resolve) => (img.onload = resolve));
 
       const { rows, cols } = grid;
-      const cellWidth = img.width / cols;
-      const cellHeight = img.height / rows;
+      
+      // Calculate adjusted slicing area based on bounds
+      const contentWidth = img.width * (1 - (gridBounds.left + gridBounds.right) / 100);
+      const contentHeight = img.height * (1 - (gridBounds.top + gridBounds.bottom) / 100);
+      const startX = img.width * (gridBounds.left / 100);
+      const startY = img.height * (gridBounds.top / 100);
+      
+      const cellWidth = contentWidth / cols;
+      const cellHeight = contentHeight / rows;
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -121,7 +185,10 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
           ctx.clearRect(0, 0, cellWidth, cellHeight);
           ctx.drawImage(
             img,
-            c * cellWidth, r * cellHeight, cellWidth, cellHeight,
+            startX + (c * cellWidth), 
+            startY + (r * cellHeight), 
+            cellWidth, 
+            cellHeight,
             0, 0, cellWidth, cellHeight
           );
           
@@ -221,40 +288,73 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
          </div>
 
          <div className="flex-1 flex items-center justify-center p-8 relative">
-            <div className="relative max-w-full max-h-full shadow-2xl shadow-black ring-1 ring-white/5 rounded overflow-hidden bg-zinc-900/50">
+            <div ref={containerRef} className="relative max-w-full max-h-full shadow-2xl shadow-black ring-1 ring-white/5 rounded overflow-hidden bg-zinc-900/50">
               {activeTool === 'CROP' ? (
                 <div className="w-[60vw] h-[60vh] relative min-w-[300px]">
                   <Cropper
                     image={image}
                     crop={crop}
                     zoom={zoom}
-                    aspect={1}
+                    aspect={aspect}
                     onCropChange={setCrop}
                     onCropComplete={onCropComplete}
                     onZoomChange={setZoom}
                   />
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-zinc-900/90 backdrop-blur px-4 py-2 rounded border border-brand-border z-50">
-                    <button 
-                      onClick={handleApplyCrop}
-                      disabled={isProcessing}
-                      className="px-4 py-1.5 bg-brand-accent hover:opacity-90 rounded text-[11px] font-bold uppercase tracking-widest text-white shadow-lg shadow-brand-accent/10"
-                    >
-                      Apply
-                    </button>
-                    <button 
-                      onClick={() => setActiveTool('SELECT')}
-                      className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-[11px] font-bold uppercase tracking-widest text-zinc-400"
-                    >
-                      Cancel
-                    </button>
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-6 bg-zinc-900/95 backdrop-blur px-6 py-3 rounded-2xl border border-brand-border z-50 shadow-2xl">
+                    <div className="flex flex-col gap-2 min-w-[140px]">
+                      <div className="flex justify-between text-[9px] mono text-zinc-500 uppercase font-bold tracking-widest">
+                        <span>Zoom</span>
+                        <span className="text-brand-accent">{Math.round(zoom * 100)}%</span>
+                      </div>
+                      <input 
+                        type="range" min={1} max={3} step={0.1}
+                        value={zoom}
+                        onChange={(e) => setZoom(parseFloat(e.target.value))}
+                        className="w-full accent-brand-accent h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer"
+                      />
+                    </div>
+                    
+                    <div className="w-px h-10 bg-zinc-800" />
+                    
+                    <div className="flex flex-col gap-2">
+                       <div className="text-[9px] mono text-zinc-500 uppercase font-bold tracking-widest">Aspect</div>
+                       <div className="flex gap-1">
+                         <button 
+                          onClick={() => setAspect(1)}
+                          className={cn("px-2 py-1 rounded text-[9px] mono", aspect === 1 ? "bg-brand-accent text-black" : "bg-zinc-800 text-zinc-400")}
+                         >1:1</button>
+                         <button 
+                          onClick={() => setAspect(undefined)}
+                          className={cn("px-2 py-1 rounded text-[9px] mono", aspect === undefined ? "bg-brand-accent text-black" : "bg-zinc-800 text-zinc-400")}
+                         >Free</button>
+                       </div>
+                    </div>
+ 
+                    <div className="w-px h-10 bg-zinc-800" />
+ 
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={handleApplyCrop}
+                        disabled={isProcessing}
+                        className="px-5 py-2 bg-brand-accent hover:opacity-90 rounded-lg text-[10px] font-bold uppercase tracking-widest text-black shadow-lg shadow-brand-accent/20 transition-all active:scale-95"
+                      >
+                        Apply
+                      </button>
+                      <button 
+                        onClick={() => setActiveTool('SELECT')}
+                        className="px-5 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-[10px] font-bold uppercase tracking-widest text-zinc-400 transition-all"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <div className="relative group">
+                <div className="relative group select-none">
                   <img 
                     src={image} 
                     alt="Workspace" 
-                    className="max-w-full max-h-[70vh] object-contain"
+                    className="max-w-full max-h-[70vh] object-contain pointer-events-none"
                     style={{
                       filter: `hue-rotate(${effects.hue}deg) saturate(${effects.saturation}%) brightness(${effects.brightness}%) contrast(${effects.contrast}%)`
                     }}
@@ -262,16 +362,80 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
                   
                   {/* Grid Overlay */}
                   {activeTool === 'SLICE' && (
-                    <div className="absolute inset-0 grid" style={{
+                    <>
+                    <div className="absolute grid pointer-events-none" style={{
+                      top: `${gridBounds.top}%`,
+                      left: `${gridBounds.left}%`,
+                      right: `${gridBounds.right}%`,
+                      bottom: `${gridBounds.bottom}%`,
                       gridTemplateColumns: `repeat(${grid.cols}, 1fr)`,
                       gridTemplateRows: `repeat(${grid.rows}, 1fr)`
                     }}>
                       {Array.from({ length: grid.rows * grid.cols }).map((_, i) => (
-                        <div key={i} className="border border-brand-accent/20 hover:bg-brand-accent/5 transition-colors flex items-center justify-center group/cell cursor-crosshair">
-                           <span className="mono text-[8px] text-zinc-600 group-hover/cell:text-brand-accent transition-colors opacity-40">{String(i + 1).padStart(2, '0')}</span>
+                        <div key={i} className="border border-brand-accent/30 flex items-center justify-center relative">
+                           <div className="absolute inset-0 bg-brand-accent/5 opacity-20" />
+                           <span className="mono text-[8px] text-brand-accent/80 font-bold z-10 drop-shadow-sm">{String(i + 1).padStart(2, '0')}</span>
                         </div>
                       ))}
                     </div>
+
+                    {/* Draggable Handles */}
+                    <div 
+                      onMouseDown={handleHandleMouseDown('top')}
+                      className="absolute -top-5 left-0 right-0 h-10 cursor-ns-resize group/h z-50 flex items-center pointer-events-auto"
+                    >
+                      <div className={cn(
+                        "w-full h-[2px] bg-brand-accent shadow-[0_0_10px_rgba(234,88,12,0.8)] transition-opacity",
+                        activeHandle === 'top' ? "opacity-100" : "opacity-0 group-hover/h:opacity-100"
+                      )} />
+                      <div className={cn(
+                         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-2.5 rounded-full bg-brand-accent shadow-lg shadow-brand-accent/20 transition-all",
+                         activeHandle === 'top' ? "scale-110 opacity-100" : "opacity-0 group-hover/h:opacity-70"
+                      )} />
+                    </div>
+
+                    <div 
+                      onMouseDown={handleHandleMouseDown('bottom')}
+                      className="absolute -bottom-5 left-0 right-0 h-10 cursor-ns-resize group/h z-50 flex items-center pointer-events-auto"
+                    >
+                      <div className={cn(
+                        "w-full h-[2px] bg-brand-accent shadow-[0_0_10px_rgba(234,88,12,0.8)] transition-opacity",
+                        activeHandle === 'bottom' ? "opacity-100" : "opacity-0 group-hover/h:opacity-100"
+                      )} />
+                      <div className={cn(
+                         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-2.5 rounded-full bg-brand-accent shadow-lg shadow-brand-accent/20 transition-all",
+                         activeHandle === 'bottom' ? "scale-110 opacity-100" : "opacity-0 group-hover/h:opacity-70"
+                      )} />
+                    </div>
+
+                    <div 
+                      onMouseDown={handleHandleMouseDown('left')}
+                      className="absolute top-0 bottom-0 -left-5 w-10 cursor-ew-resize group/h z-50 flex justify-center pointer-events-auto"
+                    >
+                      <div className={cn(
+                        "h-full w-[2px] bg-brand-accent shadow-[0_0_10px_rgba(234,88,12,0.8)] transition-opacity",
+                        activeHandle === 'left' ? "opacity-100" : "opacity-0 group-hover/h:opacity-100"
+                      )} />
+                      <div className={cn(
+                         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-20 w-2.5 rounded-full bg-brand-accent shadow-lg shadow-brand-accent/20 transition-all",
+                         activeHandle === 'left' ? "scale-110 opacity-100" : "opacity-0 group-hover/h:opacity-70"
+                      )} />
+                    </div>
+
+                    <div 
+                      onMouseDown={handleHandleMouseDown('right')}
+                      className="absolute top-0 bottom-0 -right-5 w-10 cursor-ew-resize group/h z-50 flex justify-center pointer-events-auto"
+                    >
+                      <div className={cn(
+                        "h-full w-[2px] bg-brand-accent shadow-[0_0_10px_rgba(234,88,12,0.8)] transition-opacity",
+                        activeHandle === 'right' ? "opacity-100" : "opacity-0 group-hover/h:opacity-100"
+                      )} />
+                      <div className={cn(
+                         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-20 w-2.5 rounded-full bg-brand-accent shadow-lg shadow-brand-accent/20 transition-all",
+                         activeHandle === 'right' ? "scale-110 opacity-100" : "opacity-0 group-hover/h:opacity-70"
+                      )} />
+                    </div>
+                    </>
                   )}
                 </div>
               )}
@@ -292,46 +456,60 @@ export default function EditorWorkspace({ image, onUpdateImage }: EditorWorkspac
               >
                 <div className="flex items-center gap-2 mb-4 font-bold uppercase tracking-widest text-[10px] text-zinc-500">
                   <Grid3X3 className="w-3 h-3" />
-                  Slicing Logic
+                  Grid Configuration
                 </div>
                 
                 <div className="space-y-5">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center text-[11px] text-zinc-400">
-                      <label>Grid Columns</label>
-                      <span className="mono text-brand-accent">{grid.cols}</span>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center text-[10px] text-zinc-400">
+                        <label>Cols</label>
+                        <span className="mono text-brand-accent">{grid.cols}</span>
+                      </div>
+                      <input 
+                        type="range" min="1" max="16" step="1" 
+                        value={grid.cols} 
+                        onChange={(e) => setGrid({...grid, cols: parseInt(e.target.value)})}
+                        className="w-full accent-brand-accent h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer"
+                      />
                     </div>
-                    <input 
-                      type="range" min="1" max="16" step="1" 
-                      value={grid.cols} 
-                      onChange={(e) => setGrid({...grid, cols: parseInt(e.target.value)})}
-                      className="w-full accent-brand-accent h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer"
-                    />
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center text-[10px] text-zinc-400">
+                        <label>Rows</label>
+                        <span className="mono text-brand-accent">{grid.rows}</span>
+                      </div>
+                      <input 
+                        type="range" min="1" max="16" step="1" 
+                        value={grid.rows} 
+                        onChange={(e) => setGrid({...grid, rows: parseInt(e.target.value)})}
+                        className="w-full accent-brand-accent h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer"
+                      />
+                    </div>
                   </div>
-                  
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center text-[11px] text-zinc-400">
-                      <label>Grid Rows</label>
-                      <span className="mono text-brand-accent">{grid.rows}</span>
-                    </div>
-                    <input 
-                      type="range" min="1" max="16" step="1" 
-                      value={grid.rows} 
-                      onChange={(e) => setGrid({...grid, rows: parseInt(e.target.value)})}
-                      className="w-full accent-brand-accent h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer"
-                    />
+
+                  <div className="pt-4 border-t border-brand-border space-y-4">
+                    <div className="text-[10px] font-bold uppercase text-zinc-600">Alignment Handles</div>
+                    <Slider label="Top Margin" value={gridBounds.top} min={0} max={45} unit="%" onChange={(v) => setGridBounds({...gridBounds, top: v})} />
+                    <Slider label="Bottom Margin" value={gridBounds.bottom} min={0} max={45} unit="%" onChange={(v) => setGridBounds({...gridBounds, bottom: v})} />
+                    <Slider label="Left Margin" value={gridBounds.left} min={0} max={45} unit="%" onChange={(v) => setGridBounds({...gridBounds, left: v})} />
+                    <Slider label="Right Margin" value={gridBounds.right} min={0} max={45} unit="%" onChange={(v) => setGridBounds({...gridBounds, right: v})} />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-2">
                     <button 
                       onClick={() => setGrid({ rows: 4, cols: 4 })}
                       className="py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded text-[9px] mono font-bold uppercase border border-zinc-700"
-                    >4x4 Matrix</button>
+                    >4x4 Grid</button>
                     <button 
                       onClick={() => setGrid({ rows: 8, cols: 8 })}
                       className="py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded text-[9px] mono font-bold uppercase border border-zinc-700"
-                    >8x8 Matrix</button>
+                    >8x8 Grid</button>
                   </div>
+                  
+                  <button 
+                    onClick={() => setGridBounds({ top: 0, left: 0, right: 0, bottom: 0 })}
+                    className="w-full py-2 border border-zinc-800 rounded text-[9px] mono uppercase text-zinc-500 hover:text-zinc-300"
+                  > Reset Alignment </button>
                 </div>
               </motion.div>
             )}

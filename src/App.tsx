@@ -24,6 +24,9 @@ import { GoogleGenAI } from '@google/genai';
 import JSZip from 'jszip';
 import { cn } from './lib/utils';
 import { AppMode, STYLE_PRESETS, GenerationConfig } from './types';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { storage, db } from './lib/firebase';
 
 // Components
 import SetupView from './components/SetupView';
@@ -39,15 +42,17 @@ export default function App() {
   const { user, login, logout, loading: authLoading } = useAuth();
   const [mode, setMode] = useState<AppMode>('START');
   const [image, setImage] = useState<string | null>(null);
+  const [gridSize, setGridSize] = useState<string>('4x4');
   const [prefilledPrompt, setPrefilledPrompt] = useState<string>('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  const pushToHistory = (newImage: string) => {
+  const pushToHistory = (newImage: string, gSize?: string) => {
     const newHistory = [...history.slice(0, historyIndex + 1), newImage];
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
     setImage(newImage);
+    if (gSize) setGridSize(gSize);
   };
 
   const handleUndo = () => {
@@ -68,10 +73,60 @@ export default function App() {
 
   const onUpload = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const url = e.target?.result as string;
       pushToHistory(url);
       setMode('EDIT');
+
+      // If user is logged in, sync to cloud assets
+      if (user) {
+        try {
+          console.log(`[Cloud Sync] Uploading source: ${file.name}`);
+          const timestamp = Date.now();
+          const storagePath = `users/${user.uid}/generations/${timestamp}_source.png`;
+          const idToken = await user.getIdToken();
+
+          // 1. Convert file to base64
+          const fileToBase64 = (file: File): Promise<string> => {
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.readAsDataURL(file);
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = error => reject(error);
+            });
+          };
+          const base64Data = await fileToBase64(file);
+
+          // 2. Upload to server
+          console.log(`[Cloud Sync] Sending file to server: ${storagePath}`);
+          const uploadResp = await fetch('/api/upload-to-storage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              authToken: idToken, 
+              filePath: storagePath,
+              fileData: base64Data,
+              contentType: file.type,
+              metadata: {
+                prompt: `Uploaded Source: ${file.name}`,
+                gridSize: 'single',
+                style: 'Upload',
+                type: 'source_upload'
+              }
+            })
+          });
+
+          if (!uploadResp.ok) {
+            const errData = await uploadResp.json();
+            throw new Error(`Upload failed: ${errData.error}`);
+          }
+          const { docId, imageUrl } = await uploadResp.json();
+          console.log(`[Cloud Sync] Success! Doc ID: ${docId}`);
+          console.log(`[Cloud Sync] Asset fully synced.`);
+        } catch (err) {
+          console.error("[Cloud Sync] Error during signed upload flow:", err);
+        }
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -194,8 +249,8 @@ export default function App() {
             <GenerationView 
               key="generate" 
               initialPrompt={prefilledPrompt}
-              onGenerated={(url) => {
-                pushToHistory(url);
+              onGenerated={(url, gSize) => {
+                pushToHistory(url, gSize);
                 setMode('EDIT');
                 setPrefilledPrompt('');
               }} 
@@ -232,7 +287,8 @@ export default function App() {
             <EditorWorkspace 
               key="edit"
               image={image}
-              onUpdateImage={pushToHistory}
+              initialGridSize={gridSize}
+              onUpdateImage={(url) => pushToHistory(url)}
             />
           )}
         </AnimatePresence>
