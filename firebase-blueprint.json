@@ -26,6 +26,15 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["prompt", "timestamp"]
+    },
+    "UserConfig": {
+      "title": "User Configuration",
+      "description": "User specific application settings like API keys",
+      "type": "object",
+      "properties": {
+        "stabilityApiKey": { "type": "string", "description": "Stability AI API Key" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     }
   },
   "firestore": {
@@ -36,6 +45,10 @@
     "/users/{userId}/history/{historyId}": {
       "schema": "UserHistory",
       "description": "History of prompts for a specific user"
+    },
+    "/users/{userId}/private/config": {
+      "schema": "UserConfig",
+      "description": "Private configuration for a user"
     }
   }
 }

@@ -33,6 +33,11 @@ service cloud.firestore {
         && data.timestamp == request.time;
     }
 
+    function isValidUserConfig(data) {
+      return (data.get('stabilityApiKey', '') is string && data.get('stabilityApiKey', '').size() <= 200)
+        && data.updatedAt == request.time;
+    }
+
     // Collection Rules
     match /iconSets/{iconSetId} {
       allow create: if isVerified() && isValidId(iconSetId) && isValidIconSet(incoming());
@@ -53,6 +58,10 @@ service cloud.firestore {
         allow create: if isVerified() && isOwner(userId) && isValidId(historyId) && isValidUserHistory(incoming());
         allow list: if isOwner(userId);
         allow delete: if isOwner(userId);
+      }
+
+      match /private/config {
+        allow get, write: if isOwner(userId) && (request.method != 'create' && request.method != 'update' || isValidUserConfig(incoming()));
       }
     }
 
