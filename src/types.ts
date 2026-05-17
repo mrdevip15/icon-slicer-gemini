@@ -27,7 +27,13 @@ export interface GenerationConfig {
   id?: string;
   gridSize: string;
   iconSize: string;
-  preferredEngine?: 'GEMINI' | 'STABILITY';
+  preferredEngine?: 'GEMINI' | 'STABILITY' | 'STABILITY_CORE';
+  // New fields for guided generation
+  field?: string;
+  mascotType?: string;
+  category?: string;
+  colorTheme?: string;
+  useCustomPrompt?: boolean;
 }
 
 export const STYLE_PRESETS = [

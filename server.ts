@@ -601,6 +601,61 @@ To fix:
       }
     }
 
+    // Handle Stable Image Core 3.5 (API v2beta)
+    if (preferredEngine === 'STABILITY_CORE') {
+      if (!stabilityKey) {
+        return res.status(400).json({ 
+          error: "Stability API Key not found. Please save your key in settings to use Stable Image Core." 
+        });
+      }
+
+      console.log(`[Stability Core] Starting generation for: "${prompt.substring(0, 50)}..."`);
+      
+      try {
+        const formData = new FormData();
+        formData.append('prompt', prompt);
+        formData.append('output_format', 'webp');
+        formData.append('aspect_ratio', '1:1');
+        
+        const stylePresetMap: Record<string, string> = {
+          'fantasy': 'fantasy-art',
+          'scifi': 'digital-art',
+          'pixel': 'pixel-art',
+          'minimal': 'line-art',
+          '3d-clay': '3d-model',
+          'flat': 'digital-art'
+        };
+        const stylePreset = (styleId && stylePresetMap[styleId]) || 'digital-art';
+        formData.append('style_preset', stylePreset);
+        
+        const response = await fetch(
+          'https://api.stability.ai/v2beta/stable-image/generate/core',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${stabilityKey}`,
+              Accept: 'application/json',
+            },
+            body: formData,
+          }
+        );
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.errors?.[0] || errorData.message || `Stability Core error: ${response.status}`);
+        }
+
+        const data: any = await response.json();
+        const imageData = data.image; // Stability Core returns base64 in "image" field when Accept is application/json
+        
+        console.log("[Stability Core] Generation successful");
+        return res.json({ image: `data:image/webp;base64,${imageData}`, engine: 'stability_core' });
+      } catch (error: any) {
+        console.error("[Stability Core] API error:", error);
+        return res.status(500).json({ error: `Stability Core Error: ${error.message}` });
+      }
+    }
+
     // Default to Gemini (or if explicitly Gemini)
     console.log(`[Gemini] Starting fallback/default generation for: "${prompt.substring(0, 50)}..."`);
 

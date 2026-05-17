@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, ArrowLeft, Wand2, Loader2, RefreshCw, Grid3X3, XCircle, Check, Database, Cloud, Terminal, Settings, Key, Info, Save } from 'lucide-react';
+import { Sparkles, ArrowLeft, Wand2, Loader2, RefreshCw, Grid3X3, XCircle, Check, Database, Cloud, Terminal, Settings, Key, Info, Save, Copy } from 'lucide-react';
 import { STYLE_PRESETS, GenerationConfig } from '../types';
 import { formatPrompt, cn } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
@@ -25,17 +25,28 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
     id: STYLE_PRESETS[0].id,
     gridSize: '4x4',
     iconSize: '256x256',
-    preferredEngine: 'GEMINI'
+    preferredEngine: 'GEMINI',
+    field: 'Pendidikan',
+    mascotType: 'Hewan',
+    category: 'Game',
+    colorTheme: 'Biru Professional',
+    useCustomPrompt: false
   });
+
+  const FIELDS = ['Pendidikan', 'Kesehatan', 'Hukum', 'Teknologi', 'Bisnis', 'Hiburan', 'Militer', 'Olahraga', 'Lingkungan', 'Seni'];
+  const MASCOTS = ['Hewan', 'Manusia', 'Tumbuhan', 'Benda', 'Robot', 'Makhluk Fantasi', 'Abstrak'];
+  const CATEGORIES = ['Game', 'Website', 'Mobile App'];
+  const COLORS = ['Biru Professional', 'Hijau Sejuk', 'Merah Berani', 'Kuning Ceria', 'Ungu Mewah', 'Hitam Elegan', 'Putih Bersih', 'Neon Cyberpunk', 'Pastel Lembut', 'Emas Mewah'];
   const [isGenerating, setIsGenerating] = useState(false);
   const [status, setStatus] = useState<'IDLE' | 'PREPARING' | 'SYNTHESIZING' | 'UPLOADING' | 'FINALIZING'>('IDLE');
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [stabilityKey, setStabilityKey] = useState('');
   const [isSavingKey, setIsSavingKey] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [activeEngine, setActiveEngine] = useState<'GEMINI' | 'STABILITY'>('GEMINI');
+  const [activeEngine, setActiveEngine] = useState<'GEMINI' | 'STABILITY' | 'STABILITY_CORE'>('GEMINI');
   const isCancelledRef = useRef(false);
 
   const STATUS_MESSAGES = {
@@ -169,7 +180,9 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
   };
 
   const handleGenerate = async () => {
-    if (!config.prompt) return;
+    const isGuidedValid = !config.useCustomPrompt && config.field && config.mascotType;
+    const isCustomValid = config.useCustomPrompt && config.prompt;
+    if (!isGuidedValid && !isCustomValid) return;
     
     setIsGenerating(true);
     setStatus('PREPARING');
@@ -182,11 +195,15 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
       if (user) {
         try {
           authToken = await getIdToken(user);
+          const historyPrompt = config.useCustomPrompt 
+            ? config.prompt 
+            : `${config.field} ${config.mascotType} ${config.category} (${config.colorTheme})`;
+            
           await addDoc(collection(db, `users/${user.uid}/history`), {
-            prompt: config.prompt,
+            prompt: historyPrompt,
             timestamp: serverTimestamp()
           });
-          setRecentPrompts(prev => [config.prompt, ...prev.slice(0, 4)]);
+          setRecentPrompts(prev => [historyPrompt, ...prev.slice(0, 4)]);
         } catch (err) {
           console.error("Auth/History error:", err);
         }
@@ -194,6 +211,10 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
 
       setStatus('SYNTHESIZING');
       const fullPrompt = formatPrompt(config);
+      
+      console.log("%c[ICON_SLICER_ENGINE] PROMPT_DISPATCHED", "color: #01ff88; font-weight: bold; background: #000; padding: 2px 5px; border-radius: 3px;");
+      console.log("%cPrompt:", "color: #01ff88;", fullPrompt);
+      console.log("%cConfig:", "color: #888;", config);
       
       const response = await fetch('/api/generate-icons', {
         method: 'POST',
@@ -218,6 +239,8 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
 
       if (data.engine === 'stability') {
         setActiveEngine('STABILITY');
+      } else if (data.engine === 'stability_core') {
+        setActiveEngine('STABILITY_CORE');
       } else {
         setActiveEngine('GEMINI');
       }
@@ -407,7 +430,7 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
           <section>
             <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3">Model Core</h3>
             
-            <div className="flex bg-zinc-900/50 p-1 rounded-lg border border-brand-border mb-6">
+            <div className="flex bg-zinc-900/50 p-1 rounded-lg border border-brand-border mb-6 flex-wrap gap-1">
               <button 
                 onClick={() => setConfig({...config, preferredEngine: 'GEMINI'})}
                 className={cn(
@@ -415,11 +438,11 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
                   config.preferredEngine === 'GEMINI' ? "bg-white/10 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"
                 )}
               >
-                Gemini 2.0
+                Gemini
               </button>
               <button 
                 onClick={() => {
-                  if (stabilityKey) {
+                  if (stabilityKey && !stabilityKey.includes('*')) {
                     setConfig({...config, preferredEngine: 'STABILITY'});
                   } else {
                     setShowSettings(true);
@@ -428,22 +451,103 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
                 className={cn(
                   "flex-1 py-1.5 rounded-md text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1",
                   config.preferredEngine === 'STABILITY' ? "bg-brand-accent text-black shadow-[0_0_10px_rgba(var(--brand-accent-rgb),0.3)]" : "text-zinc-500 hover:text-zinc-300",
-                  !stabilityKey && "opacity-50"
+                  (!stabilityKey || stabilityKey.includes('*')) && config.preferredEngine !== 'STABILITY' && "opacity-50"
                 )}
               >
-                SDXL 1.0 {!stabilityKey && <Key className="w-2.5 h-2.5" />}
+                SDXL {!stabilityKey && <Key className="w-2.5 h-2.5" />}
+              </button>
+              <button 
+                onClick={() => {
+                  if (stabilityKey && !stabilityKey.includes('*')) {
+                    setConfig({...config, preferredEngine: 'STABILITY_CORE'});
+                  } else {
+                    setShowSettings(true);
+                  }
+                }}
+                className={cn(
+                  "flex-1 py-1.5 rounded-md text-[9px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1",
+                  config.preferredEngine === 'STABILITY_CORE' ? "bg-brand-accent text-black shadow-[0_0_10px_rgba(var(--brand-accent-rgb),0.3)]" : "text-zinc-500 hover:text-zinc-300",
+                  (!stabilityKey || stabilityKey.includes('*')) && config.preferredEngine !== 'STABILITY_CORE' && "opacity-50"
+                )}
+              >
+                Core 3.5 {!stabilityKey && <Key className="w-2.5 h-2.5" />}
               </button>
             </div>
 
             <div className="space-y-5">
-              <div className="space-y-2">
-                <label className="text-[11px] text-zinc-400 block ml-1 font-medium">Creative Brief</label>
-                <textarea 
-                  value={config.prompt}
-                  onChange={(e) => setConfig({ ...config, prompt: e.target.value })}
-                  placeholder="e.g. isometric potions..."
-                  className="input-dark w-full h-32 resize-none leading-relaxed focus:border-brand-accent/40"
-                />
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] text-zinc-400 font-medium">Guided Generation</label>
+                  <button 
+                    onClick={() => setConfig({ ...config, useCustomPrompt: !config.useCustomPrompt })}
+                    className={cn(
+                      "text-[9px] px-2 py-0.5 rounded border transition-all",
+                      config.useCustomPrompt 
+                        ? "bg-brand-accent/20 border-brand-accent/30 text-brand-accent" 
+                        : "bg-white/5 border-white/10 text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    {config.useCustomPrompt ? "Switch to Guided" : "Switch to Custom"}
+                  </button>
+                </div>
+
+                {!config.useCustomPrompt ? (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold ml-1">Bidang / Domain</label>
+                      <select 
+                        value={config.field}
+                        onChange={(e) => setConfig({ ...config, field: e.target.value })}
+                        className="input-dark w-full h-9 text-xs"
+                      >
+                        {FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold ml-1">Tipe Maskot</label>
+                      <select 
+                        value={config.mascotType}
+                        onChange={(e) => setConfig({ ...config, mascotType: e.target.value })}
+                        className="input-dark w-full h-9 text-xs"
+                      >
+                        {MASCOTS.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold ml-1">Kategori</label>
+                      <select 
+                        value={config.category}
+                        onChange={(e) => setConfig({ ...config, category: e.target.value })}
+                        className="input-dark w-full h-9 text-xs"
+                      >
+                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold ml-1">Tema Warna</label>
+                      <select 
+                        value={config.colorTheme}
+                        onChange={(e) => setConfig({ ...config, colorTheme: e.target.value })}
+                        className="input-dark w-full h-9 text-xs"
+                      >
+                        {COLORS.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold ml-1">Creative Brief (Custom)</label>
+                    <textarea 
+                      value={config.prompt}
+                      onChange={(e) => setConfig({ ...config, prompt: e.target.value })}
+                      placeholder="e.g. isometric magic potions with glowing particles..."
+                      className="input-dark w-full h-32 resize-none leading-relaxed focus:border-brand-accent/40"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -523,6 +627,38 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
                     </div>
                   </motion.div>
                 )}
+
+                {/* Prompt Generator Preview */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+                      <Terminal className="w-2.5 h-2.5" />
+                      System Prompt Preview
+                    </label>
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(formatPrompt(config));
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="text-[9px] px-2 py-1 flex items-center gap-1.5 text-zinc-500 hover:text-brand-accent transition-colors"
+                    >
+                      {copied ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="p-3 bg-black/40 border border-brand-border rounded-md group relative">
+                    <p className="text-[9px] text-zinc-400 mono leading-relaxed h-16 overflow-y-auto scrollbar-hide break-words">
+                      {formatPrompt(config)}
+                    </p>
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="w-1.5 h-1.5 rounded-full bg-brand-accent animate-pulse" />
+                    </div>
+                    <div className="absolute bottom-2 right-2 text-[8px] text-zinc-600 font-bold uppercase pointer-events-none">
+                      Autogen Live
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -597,10 +733,10 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
           ) : (
             <button
               onClick={handleGenerate}
-              disabled={!config.prompt}
+              disabled={!config.useCustomPrompt && (!config.field || !config.mascotType) || (config.useCustomPrompt && !config.prompt)}
               className={cn(
                 "btn-primary w-full py-2.5 text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-brand-accent/10",
-                !config.prompt && "opacity-30 cursor-not-allowed"
+                ((!config.useCustomPrompt && (!config.field || !config.mascotType)) || (config.useCustomPrompt && !config.prompt)) && "opacity-30 cursor-not-allowed"
               )}
             >
               <Sparkles className="w-3.5 h-3.5" />
@@ -619,10 +755,16 @@ export default function GenerationView({ initialPrompt, onGenerated, onBack }: G
                STATUS: {isGenerating ? "GENERATING" : "IDLE"}
              </div>
              <div className="mono text-[10px] text-zinc-500 uppercase">
-               ENGINE: {(isGenerating ? config.preferredEngine : activeEngine) === 'STABILITY' ? 'STABILITY_XL_1.0' : 'GEMINI_2.0_FLASH'}
+               ENGINE: {
+                 (isGenerating ? config.preferredEngine : activeEngine) === 'STABILITY' 
+                   ? 'STABILITY_XL_1.0' 
+                   : (isGenerating ? config.preferredEngine : activeEngine) === 'STABILITY_CORE'
+                   ? 'STABILITY_CORE_3.5'
+                   : 'GEMINI_2.0_FLASH'
+               }
              </div>
           </div>
-          {activeEngine === 'STABILITY' && (
+          {((isGenerating ? config.preferredEngine : activeEngine) === 'STABILITY' || (isGenerating ? config.preferredEngine : activeEngine) === 'STABILITY_CORE') && (
             <div className="flex items-center gap-2 px-2 py-0.5 bg-brand-accent/10 border border-brand-accent/20 rounded-full">
               <Sparkles className="w-2.5 h-2.5 text-brand-accent" />
               <span className="text-[9px] text-brand-accent font-bold uppercase tracking-tighter">HD Mode Active</span>
