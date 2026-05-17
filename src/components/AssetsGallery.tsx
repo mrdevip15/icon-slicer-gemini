@@ -7,6 +7,7 @@ import { Loader2, Image as ImageIcon, Calendar, Trash2, ArrowRight } from 'lucid
 import { cn } from '../lib/utils';
 
 interface AssetsGalleryProps {
+  key?: string;
   onSelect: (url: string) => void;
   onBack: () => void;
 }

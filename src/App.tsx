@@ -98,7 +98,10 @@ export default function App() {
           
           <nav className="hidden md:flex gap-4 text-[11px] font-bold tracking-wider uppercase">
             <span 
-              onClick={() => mode !== 'START' && mode !== 'GENERATE' && setMode('EDIT')} 
+              onClick={() => {
+                if (image) setMode('EDIT');
+                else setMode('START');
+              }} 
               className={mode !== 'ASSETS' ? activeTabClass : inactiveTabClass}
             >
               Workspace
@@ -145,7 +148,7 @@ export default function App() {
             )}
           </div>
 
-          {mode !== 'START' && (
+          {(mode === 'EDIT' || mode === 'GENERATE') && (
             <div className="flex items-center gap-1 bg-white/5 rounded p-1 border border-brand-border mr-2">
               <button 
                 onClick={handleUndo} 
@@ -198,7 +201,7 @@ export default function App() {
                 pushToHistory(url);
                 setMode('EDIT');
               }}
-              onBack={() => setMode('START')}
+              onBack={() => setMode(image ? 'EDIT' : 'START')}
             />
           )}
 
